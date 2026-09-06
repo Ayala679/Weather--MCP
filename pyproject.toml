@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "google-genai>=1.15.0",
+    "gradio>=5.0.0",
     "mcp>=1.27.0",
     "python-dotenv>=1.2.2",
     "playwright>=1.44.0",

@@ -1,3 +1,5 @@
+import os
+
 from mcp.server.fastmcp import FastMCP
 from playwright.async_api import TimeoutError as PlaywrightTimeout
 from playwright.async_api import async_playwright, Browser, Page, Playwright
@@ -5,6 +7,9 @@ from playwright.async_api import async_playwright, Browser, Page, Playwright
 mcp = FastMCP("weather-Israel")
 
 FORECAST_URL = "https://www.weather2day.co.il/forecast"
+
+# Set WEATHER_HEADLESS=1 to run Chrome without a visible window.
+HEADLESS = os.environ.get("WEATHER_HEADLESS", "").strip().lower() in {"1", "true", "yes"}
 
 _playwright: Playwright | None = None
 _browser: Browser | None = None
@@ -16,7 +21,7 @@ async def _get_page() -> Page:
     global _playwright, _browser, _page
     if _browser is None or not _browser.is_connected():
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(channel="chrome", headless=False)
+        _browser = await _playwright.chromium.launch(channel="chrome", headless=HEADLESS)
         _page = await _browser.new_page()
     elif _page is None:
         _page = await _browser.new_page()

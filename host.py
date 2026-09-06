@@ -1,6 +1,6 @@
 import asyncio
 import os
-from typing import Any
+from typing import Any, AsyncIterator
 
 from google import genai
 from google.genai import types
@@ -121,6 +121,21 @@ class ChatHost:
 
         return [types.Tool(function_declarations=declarations)]
 
+    async def _generate(self, contents: list, config: "types.GenerateContentConfig"):
+        """Call Gemini, retrying briefly on transient 429/503 responses."""
+        delay = 2.0
+        for attempt in range(4):
+            try:
+                return await self.client.aio.models.generate_content(
+                    model=MODEL, contents=contents, config=config
+                )
+            except Exception as exc:
+                code = getattr(exc, "code", None)
+                if code not in (429, 503) or attempt == 3:
+                    raise
+                await asyncio.sleep(delay)
+                delay *= 2
+
     async def _run_tool(self, name: str, args: dict[str, Any]) -> str:
         client, original_name = self.tool_clients[name]
         if client.session is None:
@@ -134,36 +149,37 @@ class ChatHost:
         ]
         return "\n".join(chunks) if chunks else "(the tool returned no text)"
 
-    async def process_query(self, query: str) -> str:
-        """Answer a user query, letting Gemini call MCP tools as needed."""
+    async def stream_query(self, query: str) -> AsyncIterator[tuple]:
+        """Run the Gemini tool-calling loop, yielding progress events.
+
+        Emits ("tool", name, args) right before each MCP call and
+        ("text", chunk) for every piece of model prose.
+        """
         tools = await self.build_tools()
         config = types.GenerateContentConfig(tools=tools)
         contents: list[types.Content] = [
             types.Content(role="user", parts=[types.Part(text=query)])
         ]
-        transcript: list[str] = []
 
         while True:
-            response = await self.client.aio.models.generate_content(
-                model=MODEL, contents=contents, config=config
-            )
+            response = await self._generate(contents, config)
 
             candidate = response.candidates[0]
             contents.append(candidate.content)
             parts = candidate.content.parts or []
 
-            calls = [part.function_call for part in parts if part.function_call]
             for part in parts:
                 if part.text:
-                    transcript.append(part.text)
+                    yield ("text", part.text)
 
+            calls = [part.function_call for part in parts if part.function_call]
             if not calls:
-                break
+                return
 
             tool_responses: list[types.Part] = []
             for call in calls:
                 args = dict(call.args or {})
-                transcript.append(f"[running tool {call.name} with {args}]")
+                yield ("tool", call.name, args)
                 output = await self._run_tool(call.name, args)
                 tool_responses.append(
                     types.Part.from_function_response(
@@ -173,7 +189,16 @@ class ChatHost:
 
             contents.append(types.Content(role="user", parts=tool_responses))
 
-        return "\n".join(transcript)
+    async def process_query(self, query: str) -> str:
+        """Collect a full answer as plain text (used by the terminal client)."""
+        lines: list[str] = []
+        async for event in self.stream_query(query):
+            if event[0] == "tool":
+                _, name, args = event
+                lines.append(f"[running tool {name} with {args}]")
+            else:
+                lines.append(event[1])
+        return "\n".join(lines)
 
     async def chat_loop(self):
         """Run an interactive chat loop."""
