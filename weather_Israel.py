@@ -93,6 +93,18 @@ async def get_weather_page_content_israel() -> str:
     return f"=== Weather Page Content ===\nURL: {page.url}\n\n{content}"
 
 
+@mcp.tool()
+async def get_israel_forecast(city: str) -> str:
+    """One call that does the whole flow: open the forecast site, search for
+    'city', pick the first match, and return the cleaned forecast text. Use this
+    for a normal weather question - it keeps the conversation short. The separate
+    open/enter/select tools are for stepping through the browser manually."""
+    await open_weather_forecast_israel()
+    await enter_weather_forecast_city_israel(city)
+    await select_weather_forecast_city_israel()
+    return await get_weather_page_content_israel()
+
+
 def main():
     mcp.run(transport="stdio")
 

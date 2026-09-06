@@ -12,6 +12,7 @@ from host import ChatHost
 
 # Human-readable Hebrew labels for the tool-call progress log.
 TOOL_LABELS = {
+    "weather_Israel__get_israel_forecast": "פותח דפדפן ושולף את התחזית",
     "weather_Israel__open_weather_forecast_israel": "פותח את אתר התחזית",
     "weather_Israel__enter_weather_forecast_city_israel": "מקליד את שם העיר",
     "weather_Israel__select_weather_forecast_city_israel": "בוחר עיר מהרשימה",
@@ -19,6 +20,12 @@ TOOL_LABELS = {
     "weather_USA__get_forecast_in_USA": "שולף תחזית (ארה״ב)",
     "weather_USA__get_alerts_in_USA": "שולף אזהרות מזג אוויר (ארה״ב)",
 }
+
+QUOTA_MESSAGE = (
+    "❌ נגמרה מכסת הבקשות היומית החינמית של Gemini למודל הזה. "
+    "המכסה מתאפסת אוטומטית אחרי 24 שעות. "
+    "אפשר גם לשנות `MODEL` ב-host.py למודל אחר, או להוסיף חיוב ב-Google AI Studio."
+)
 
 _host: ChatHost | None = None
 _host_lock = asyncio.Lock()
@@ -73,11 +80,18 @@ async def chat(message: str, history: list):
                 yield _render(steps, answer, done=False)
             yield _render(steps, answer, done=True)
         except Exception as exc:
-            yield _render(steps, answer, done=True) + f"\n\n❌ שגיאה: {exc}"
+            is_quota = getattr(exc, "code", None) == 429 or "RESOURCE_EXHAUSTED" in str(exc)
+            note = QUOTA_MESSAGE if is_quota else f"❌ שגיאה: {exc}"
+            yield _render(steps, answer, done=True) + "\n\n" + note
 
 
 CSS = """
-.gradio-container { direction: rtl; max-width: 900px !important; }
+.gradio-container {
+    direction: rtl;
+    max-width: 880px !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+}
 .gradio-container h1 { letter-spacing: -0.5px; }
 details > summary { cursor: pointer; color: var(--body-text-color-subdued); font-size: 0.9em; }
 footer { display: none !important; }

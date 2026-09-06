@@ -10,10 +10,21 @@ from client import MCPClient
 
 load_dotenv()
 
-# Free-tier model on Google AI Studio. "gemini-flash-latest" always points at the
-# current Flash release; pin an explicit name (e.g. "gemini-3.6-flash") if you
-# want reproducible behaviour.
-MODEL = "gemini-flash-latest"
+# Free-tier model on Google AI Studio. The "-lite" line has a much larger free
+# daily quota than the full Flash model, which matters when every weather
+# question costs two model calls. Pin an explicit name (e.g. "gemini-3.5-flash-lite")
+# for reproducible behaviour.
+MODEL = "gemini-flash-lite-latest"
+
+# Keeps the tool-calling loop short: one call to fetch the forecast, one to answer.
+SYSTEM_INSTRUCTION = (
+    "You answer weather questions. For a question about an Israeli city, call "
+    "the get_israel_forecast tool once with the city name, then answer from the "
+    "text it returns. Use the separate open/enter/select tools only if the user "
+    "explicitly asks to see the step-by-step browser flow. Reply in the user's "
+    "language, briefly, leading with the numbers that matter (temperature, "
+    "humidity, wind, chance of rain)."
+)
 
 # JSON-schema keywords that Gemini's function-calling accepts. FastMCP emits a
 # few extras ("title", "additionalProperties", "$defs"...) that trigger 400s, so
@@ -122,16 +133,19 @@ class ChatHost:
         return [types.Tool(function_declarations=declarations)]
 
     async def _generate(self, contents: list, config: "types.GenerateContentConfig"):
-        """Call Gemini, retrying briefly on transient 429/503 responses."""
+        """Call Gemini, retrying only on transient 503 (server overload).
+
+        A 429 here is a quota limit - retrying in-process won't clear it, so we
+        surface it immediately and let the caller show a helpful message.
+        """
         delay = 2.0
-        for attempt in range(4):
+        for attempt in range(3):
             try:
                 return await self.client.aio.models.generate_content(
                     model=MODEL, contents=contents, config=config
                 )
             except Exception as exc:
-                code = getattr(exc, "code", None)
-                if code not in (429, 503) or attempt == 3:
+                if getattr(exc, "code", None) != 503 or attempt == 2:
                     raise
                 await asyncio.sleep(delay)
                 delay *= 2
@@ -156,7 +170,9 @@ class ChatHost:
         ("text", chunk) for every piece of model prose.
         """
         tools = await self.build_tools()
-        config = types.GenerateContentConfig(tools=tools)
+        config = types.GenerateContentConfig(
+            tools=tools, system_instruction=SYSTEM_INSTRUCTION
+        )
         contents: list[types.Content] = [
             types.Content(role="user", parts=[types.Part(text=query)])
         ]
